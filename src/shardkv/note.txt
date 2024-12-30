@@ -1,0 +1,77 @@
+###
+
+The KV Service works as follows:
+
+1) Client(s) submit request through the leader. The leader issues the expected log index
+(if the request is ever sucessful) to the client.
+
+2) The request goes through Raft consensus via Op data type. Raft decides, among many request,
+which one will be replied back through <- ApplyCh. Raft's properties guarantee that thsese
+applyMsg comes sequentially as the commitIndex monotonically increase.
+
+3) Once the KV Server (application layer) receives the msg from Raft, it must decides whether
+this msg is a duplicated one or not. If yes, it does not apply the said operation to state machine.
+If not, it does apply to the state machine.
+
+4) In both case, the KV server send the result from the state machine (in case of Get)
+back to the client's RPC through the channel specifically created for the expected index.
+
+Noted that the client may not receive the reply back every index. For example, 
+when Client submit R1 and R2, R1 may not be commited and the R2 was replied back.
+In this case, the client time-out for R1 and resubmit as R1.2. This resubmission is done
+automatically so it is transparent to the client (as a person).
+
+However, in the view of the state machine, the R1 and R2 may be both commited to the state machine
+Now once the R1.2 is received, the KV Server decides if this is duplicated or not.
+
+Q: Does your implementation randomly select the receiving's end of the indexed channel when
+send op back to Client's RPC ?
+A: No, be reminded that Raft's Start() issues monotonically increasing expected index back
+to the client. So two clients never receives the same index and thus waiting on different
+indexed channel
+
+Q: Does this mean the preceding index does not imply the request being replied 
+before the indexes that follow ?
+A: Yes it does not. Some request may be timed-out and resubmiited. However, if the
+request has gone through raft, committed, and applied to the state machin, the resubmit
+will be idempotent.
+
+
+Q: Your first implementation uses channel-multiplexing and does not use indexed-channel
+for replying back to client. Why didn't it work ?
+
+A: Using multiplexing solves the routing issue by multiplexing via ClientID. However,
+you will face with the concurrent "in-flight" messages - the reorder of the msg seen from
+the multiplexed channel is not guarantee to be the same as that of your submission. 
+
+For example, the client may submit the request and
+due to network issue, the reply is timed-out. However, the request goes through the state machine.
+Now the client resubmit the request. But the reply is stale in the channel Op <- from_raft.
+This will also create channel contention and we will never know which reply that comes out of the channel
+is supposed to correspond to which request (it is stale) 
+
+=> Request is sent → Timeout occurs → Stale reply remains in the multiplexed channel → Resubmitted request creates ambiguity in matching replies.
+# Implementation note on shard movement
+Each of your shards is only required to make progress when a majority of servers 
+in the shard's Raft replica group is alive and can talk to each other, 
+and can talk to a majority of the shardctrler servers. 
+Your implementation must operate 
+(serve requests and be able to re-configure as needed) 
+even if a minority of servers in some replica group(s) are dead, 
+temporarily unavailable, or slow.
+
+>> Majority of ShardControler: 
+This aspect is handled via Raft's of ShardControler (the configure change RPCs
+are commited to ShardCtrler's state machine only when majority is available)
+
+>> Majority of KV Server:
+Each KV server polls the controller indepentdently through go routine 
+spawned at the start of the server. Their configuration
+may diverge at some point in time. ? only leader should polls
+ -> should the leader submit the reconfig to raft -> handle more case of applyMsg Op
+  = Reconfig (as this will come from same channel as other log)
+
+
+A shardkv server is a member of only a single replica group. 
+The set of servers in a given replica group will never change.
+
