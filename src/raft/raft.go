@@ -1,13 +1,11 @@
 package raft
 
 import (
-	"bytes"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"6.5840/labgob"
 	"6.5840/labrpc"
 )
 
@@ -72,8 +70,7 @@ type Raft struct {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+
 	// Code hidden
 }
 
@@ -82,19 +79,13 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 // lock must be held before calling this.
 func (rf *Raft) persist() {
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
+
 	// Code hidden
 
 }
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 {
-		return
-	}
-	r := bytes.NewBuffer(data)
-	d := labgob.NewDecoder(r)
 	// Code hidden
 
 }
@@ -108,13 +99,6 @@ func (rf *Raft) ReadSnapshot() []byte {
 }
 
 func (rf *Raft) restoreFromSnapshot(data []byte) {
-	if data == nil || len(data) < 1 {
-		return
-	}
-
-	r := bytes.NewBuffer(data)
-	d := labgob.NewDecoder(r)
-
 	// Code hidden
 
 }
@@ -257,32 +241,11 @@ func (rf *Raft) isLogUpToDate(cLastIndex int, cLastTerm int) bool {
 
 func (rf *Raft) applySnapshot() {
 
-	rf.applyCh <- ApplyMsg{
-		SnapshotValid: true,
-		Snapshot:      rf.persister.ReadSnapshot(),
-		SnapshotTerm:  rf.snapLastTerm,
-		SnapshotIndex: rf.snapLastIndex,
-	}
-
+	// Code hidden
 }
 
 func (rf *Raft) applyLogs() {
-	rf.mu.Lock()
-	logsToApply := make([]ApplyMsg, 0)
-
-	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-		logsToApply = append(logsToApply, ApplyMsg{
-			CommandValid: true,
-			Command:      rf.logs[i-rf.snapLastIndex].Command,
-			CommandIndex: i,
-		})
-		rf.lastApplied = i
-	}
-	rf.mu.Unlock() // Release the lock before interacting with applyCh
-
-	for _, msg := range logsToApply {
-		rf.applyCh <- msg
-	}
+	// Code hidden
 }
 
 // RequestVote RPC handler.
@@ -291,33 +254,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 }
 
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-
-	if !ok {
-		return
-	}
-
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	if rf.state != Candidate || args.Term != rf.currentTerm || reply.Term < rf.currentTerm {
-		return
-	}
-
-	if reply.Term > rf.currentTerm {
-		rf.stepDownToFollower(args.Term)
-		rf.persist()
-		return
-	}
-
-	if reply.VoteGranted {
-		rf.voteCount++
-		// only send once when vote count just reaches majority
-		if rf.voteCount == len(rf.peers)/2+1 {
-			rf.sendToChannel(rf.winElectCh, true)
-		}
-	}
-
+	// Code hidden
 }
 
 // broadcast RequestVote RPCs to all peers in parallel.
@@ -442,30 +379,13 @@ func (rf *Raft) runServer() {
 		rf.mu.Unlock()
 		switch state {
 		case Leader:
-			select {
-			case <-rf.stepDownCh:
-				// state should already be follower
-			case <-time.After(30 * time.Millisecond):
-				rf.mu.Lock()
-				rf.broadcastAppendEntries()
-				rf.mu.Unlock()
-			}
+			// Code hidden
+
 		case Follower:
-			select {
-			case <-rf.grantVoteCh:
-			case <-rf.heartbeatCh:
-			case <-time.After(rf.getElectionTimeout() * time.Millisecond):
-				rf.convertToCandidate(Follower)
-			}
+			// Code hidden
+
 		case Candidate:
-			select {
-			case <-rf.stepDownCh:
-				// state should already be follower
-			case <-rf.winElectCh:
-				rf.convertToLeader()
-			case <-time.After(rf.getElectionTimeout() * time.Millisecond):
-				rf.convertToCandidate(Candidate)
-			}
+			// Code hidden
 		}
 	}
 }
