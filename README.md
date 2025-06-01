@@ -1,11 +1,11 @@
 # Distributed Key-Value Store with Raft Consensus
 
-This repository implements a fault-tolerant **Distributed Key-Value Store** built on the **Raft Consensus Algorithm**.
+This repository implements a fault-tolerant **Distributed Key-Value Store** built on the **Raft**.
 
 It is semester-long project for MIT's 6.824 Distributed Systems course.
-To comply with MIT's Policy (and its generosity to put the entire course in public), I do not post the source code of the **core** implementation (raft.go and server.go). Only API description is shown.
+To comply with MIT's Policy (and its generosity to put the entire course in public), I do not post the source code of the **core** implementation. Only API description is shown.
 
-Rather, I describe the architecture of the system below. If you're interested in the code, please contact me via private message.
+Rather, I describe the architecture of the system below. If you're interested in the code or talk about it, please send me a message :) 
 
 - [x] **Lab #1: MapReduce**
 - [x] **Lab #2: KV Server**
