@@ -2,7 +2,7 @@
 
 This repository implements a fault-tolerant **Distributed Key-Value Store** built on the **Raft**.
 
-It is semester-long project for MIT's 6.824 Distributed Systems course.
+It is semester-long project for [MIT's 6.824 Distributed Systems course](http://nil.csail.mit.edu/6.5840/2024/).
 To comply with MIT's Policy (and its generosity to put the entire course in public), I do not post the source code of the **core** implementation. Only API description is shown.
 
 Rather, I describe the architecture of the system below. If you're interested in the code or talk about it, please send me a message :) 
