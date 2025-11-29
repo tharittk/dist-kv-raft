@@ -1,9 +1,9 @@
-# Building a Fault-Tolerant, Sharded Key-Value Store in Go
+# Building a Fault-Tolerant, Sharded Key-Value Store using Raft in Go 
 
-This repository documents the design and implementation of a **fault-tolerant, sharded key-value store** built in Go. This is the semester-long project for MIT's 6.824 Distributed Systems course - it is [free to the public](https://pdos.csail.mit.edu/6.824/schedule.html).
+This repository documents the design and implementation of a Raft-based **fault-tolerant, sharded key-value store**. This is the semester-long project for MIT's 6.824 Distributed Systems course - it is [free to the public](https://pdos.csail.mit.edu/6.824/schedule.html).
 
 The system architecture is built from the ground up:
-1. Raft Consensus: A library to manage replicated logs and leader election.
+1. Raft Consensus: A consensus protocol to manage replicated logs and leader election.
 2. Key-Value Server: A linearizable state machine built on top of Raft.
 3. Shard Controller: A fault-tolerant configuration manager for data distribution.
 
@@ -11,7 +11,6 @@ The system architecture is built from the ground up:
 Note: To respect the academic integrity (I'm not an MIT student) of the course, this write-up focuses on
 architectural design and high-level logic rather than providing the full, line-by-line source code.
 ```
-
 
 ### Project Progression
 The implementation follows the sequence of the MIT 6.824 labs:
@@ -26,9 +25,9 @@ The implementation follows the sequence of the MIT 6.824 labs:
 
 - [x] Lab 5: Sharded KV (Shard Controller, Data Movement, Garbage Collection)
 
-Just so you know, I try my best not to tell the actual working code line-by-line, as it is beneficial for people who take the class, for leisure or grade, to go through a debugging session themselves instead of following thought-through pseudocode.
+👉 Just so you know, I try my best not to tell the actual working code line-by-line. It is beneficial for people who take the class, for leisure or grade, to go through debugging themselves instead of following a thought-through pseudocode.
 
-## The Core: Raft Consensus Algorithm
+## The Core: Raft Consensus Algorithm 
 
 At the core of any fault-tolerant system is a consensus algorithm. I implemented the [Raft consensus algorithm](https://raft.github.io/), which provides a way for a group of servers to agree on a single, ordered log of operations, even in the face of failures.
 
@@ -126,7 +125,7 @@ func (rf *Raft) runServer() {
 
 ### Leader Election (3A)
 
-Elections are driven by randomized timeouts. This simple randomization policy effectively prevents "split votes" and simplifies system reasoning (**I appreciate this more after I study Paxos**).
+Elections are driven by randomized timeouts. This simple randomization policy effectively prevents "split votes" and simplifies system reasoning (**I appreciate this more after I studied Paxos months after at my university 🔥**).
 
 The RequestVote RPC ensures safety: a peer grants a vote only if the candidate's log is at least as up-to-date as its own.
 
@@ -194,20 +193,19 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 ```
 From the code, we can see that there are 2 cases:
 
-Case 1 — Leader has entries with that term T
+**Case 1 — Leader has entries with that term T**
 
 Follower’s conflicting term T might be shorter or longer than the leader’s copy. But if both have entries in term T, they might still agree up to the last occurrence of T in the leader’s log.
 There’s **no need to delete all entries from that term — only what follows it**. So by jumping to the last index of term T in the leader’s log, we ensure that all entries before that are definitely correct.
 
 
-Case 2 — Leader does NOT have entries with that term T
+**Case 2 — Leader does NOT have entries with that term T**
 
 Then the follower’s entire conflicting term T is “garbage” (no such term in the leader’s history).
 The leader should jump to the follower’s ConflictIndex — i.e., delete that whole term range.
 
 
 ### Persistence (3C, 3D)
-
 To survive crashes, a Raft server must persist its `currentTerm`, `votedFor`, and `logs` to stable storage before responding to RPCs.
 
 ```go
@@ -225,7 +223,7 @@ func (rf *Raft) persist() {
 
 Upon server restart, the server reads the persistent state right away. But this alone is not enough since the `commitIndex` is not part of the persistent state by design. To "let the server get up to speed", the leader, upon the successful election, appends the `no-op` log entry and broadcasts it. Raft takes advantage of its side-effect that the restarted server will replay its commit (from start to the leader's `commitIndex`).
 
-### Snapshotting (4A, 4B)
+### Snapshotting (4A, 4B) 📸
 
 In a long-running system, the Raft log cannot grow indefinitely. We use Snapshotting to trim old log entries once the application state machine has safely processed and persisted them.
 
@@ -292,7 +290,7 @@ We use a Submit-and-Wait pattern to guarantee strong consistency:
 
 1. Request: Handler receives a client RPC.
 
-2. Submit: Calls rf.Start(op) to append the operation to the Raft log.
+2. Submit: Calls `rf.Start(op)` to append the operation to the Raft log.
 
 3. Wait: Listens on a dedicated channel for that specific log index.
 
@@ -372,4 +370,4 @@ Once the leader has gathered all the necessary data from other groups, it propos
 And that's it!
 ```
 
-For anyone interested in a deep, hands-on understanding of distributed systems, I cannot recommend the [MIT 6.824 course materials](https://pdos.csail.mit.edu/6.824/) highly enough. I think I forget to mention that the video lectures are also available on [Youtube] (https://www.youtube.com/playlist?list=PLrw6a1wE39_tb2fErI4-WkMbsvGQk9_UB). You can pretty get the full course experience 😁 - well, without the pain of mid-term and final exam !
+For anyone interested in a deep, hands-on understanding of distributed systems, I cannot recommend the [MIT 6.824 course materials](https://pdos.csail.mit.edu/6.824/) highly enough. I think I forget to mention that the video lectures are also available on [Youtube](https://www.youtube.com/playlist?list=PLrw6a1wE39_tb2fErI4-WkMbsvGQk9_UB). You can pretty much get the full course experience 😁 - well, without the pain of mid-term and final exam !
