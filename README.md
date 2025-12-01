@@ -1,15 +1,18 @@
 # Building a Fault-Tolerant, Sharded Key-Value Store using Raft in Go 
 
-This repository documents the design and implementation of a Raft-based **fault-tolerant, sharded key-value store**. This is the semester-long project for MIT's 6.824 Distributed Systems course - it is [free to the public](https://pdos.csail.mit.edu/6.824/schedule.html).
+This repository documents the design and implementation of a Raft-based **fault-tolerant, sharded key-value store**. This is the semester-long project for MIT's 6.824 Distributed Systems course - [free to the public](https://pdos.csail.mit.edu/6.824/schedule.html).
 
 The system architecture is built from the ground up:
-1. Raft Consensus: A consensus protocol to manage replicated logs and leader election.
+1. Raft Consensus: A consensus protocol to manage replicated logs, including snapshotting, and leader election.
 2. Key-Value Server: A linearizable state machine built on top of Raft.
 3. Shard Controller: A fault-tolerant configuration manager for data distribution.
 
 ```markdown
-Note: To respect the academic integrity (I'm not an MIT student) of the course, this write-up focuses on
+Note: To respect the academic integrity of the course, this write-up focuses on
 architectural design and high-level logic rather than providing the full, line-by-line source code.
+
+⚠️ This repository is a stripped copy of the orignal working repo so that I can hide the code.
+Otherwise, the working code can be tracked down through commited history.
 ```
 
 ### Project Progression
@@ -35,7 +38,7 @@ At the core of any fault-tolerant system is a consensus algorithm. I implemented
 
 The state of each Raft peer is captured in the `Raft` struct. It holds all the persistent and volatile state described in the Raft paper, along with channels for coordinating the server's state machine. The channel is a preferred way for Go for inter-process communication (ipc). In other languages, such as Python, `queue.Queue()` along with `event` can be used in place of Go's channels as well.
 
-Actually, I discovered later that [gRPC](https://grpc.io/) does all this heavy lifting. But I think building Raft from Go's channel gives the best flavor of it.
+Recently, I discovered later that [gRPC](https://grpc.io/) does all this heavy lifting. Anyway, I still think building Raft from Go's channel gives the best flavor of it.
 
 ```go
 type Raft struct {
@@ -71,7 +74,7 @@ type LogEntry struct {
 
 ### The Raft State Machine
 
-The server lifecycle is controlled by runServer, a main loop that switches behavior based on the current state (Follower, Candidate, Leader). This cleanly isolates the logic for election timeouts and heartbeats.
+The server lifecycle is controlled by `runServer`, a main loop that switches behavior based on the current state (Follower, Candidate, Leader). This cleanly isolates the logic for election timeouts and heartbeats.
 
 Here is the illustration [credit](https://blog.kezhuw.name/2018/03/20/A-step-by-step-approach-to-raft-consensus-algorithm):
 
@@ -119,17 +122,17 @@ func (rf *Raft) runServer() {
 }
 ```
 
--   **Followers** wait for heartbeats (`AppendEntries` RPCs) from a leader. If a randomized election timeout elapses without receiving one, the follower transitions to a `Candidate`.
--   **Candidates** increment the term, vote for themselves, and request votes from peers. They can either win the election and become a `Leader`, lose the election and step down to a `Follower` if they see a higher term, or time out and start a new election.
--   **Leaders** send periodic heartbeats to all followers to maintain authority and replicate log entries.
+-   **Followers** wait for heartbeats (an "empty" `AppendEntries` RPCs) from a leader. If a randomized election timeout elapses without receiving one, the follower transitions to a `Candidate`.
+-   **Candidates** increment the term, vote for themselves, and request votes from peers. They can either win the election and become a `Leader` or lose the election and step down to a `Follower` if they see a higher term, or time out and start a new election.
+-   **Leaders** send periodic heartbeats to all followers to maintain authority and replicate log entries (later on, `Leader` can send snapshot as well).
 
 ### Leader Election (3A)
 
 Elections are driven by randomized timeouts. This simple randomization policy effectively prevents "split votes" and simplifies system reasoning (**I appreciate this more after I studied Paxos months after at my university 🔥**).
 
-The RequestVote RPC ensures safety: a peer grants a vote only if the candidate's log is at least as up-to-date as its own.
+The `RequestVote` RPC ensures safety: a peer grants a vote only if the candidate's log is at least as up-to-date as its own.
 
-The `RequestVote` RPC is the core of this process. A candidate calls this on other peers, and a peer will grant its vote only if it hasn't already voted in the current term and if the candidate's log is at least as up-to-date as its own.
+The `RequestVote` RPC is the core of this process. A candidate calls this on other peers, and a peer will grant its vote only if it hasn't already voted in the current term and if the candidate's log is at least as up-to-date as its own i.e., the cadidate is legit.
 
 ```go
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
@@ -162,12 +165,14 @@ This process maintains the Raft's invariant that **in the system, the log at the
 must send earlier log(s) - which potentially replace conflicting logs in the follower.
 
 When a follower’s log is inconsistent with the leader’s, Raft needs to find the first index where their logs agree, then overwrite from there onward.
-Without optimization, the leader would decrement nextIndex by 1 each time — slow if there are many entries that mismatch.
+Without optimization, the leader would decrement `nextIndex` by 1 each time — slow if there are many entries that mismatch.
 
-```markdown
-Hence, there is an optimization to have the follower include its `ConflictIndex` and `ConflictTerm` in the reply
+✅ Hence, there is an optimization: have the follower include its `ConflictIndex` and `ConflictTerm` in the reply
 so that the leader can decrement `nextIndex` and re-send once for one conflicting term.
-```
+
+- `ConflictTerm`: The term of the first conflicting entry follow has at the leader's `prevLogIndex` (or the term of its last entry if its log is shorter).
+- `ConflictIndex`: The index of the first entry in follower's log that has the `conflictTerm` (or the length of its log if the leader's prevLogIndex is beyond its log length). 
+
 
 ```go
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -221,11 +226,13 @@ func (rf *Raft) persist() {
 }
 ```
 
-Upon server restart, the server reads the persistent state right away. But this alone is not enough since the `commitIndex` is not part of the persistent state by design. To "let the server get up to speed", the leader, upon the successful election, appends the `no-op` log entry and broadcasts it. Raft takes advantage of its side-effect that the restarted server will replay its commit (from start to the leader's `commitIndex`).
+Upon server restart, the server reads the persistent state right away. But this alone is not enough since the `commitIndex` is not part of the persistent state by design. To "let the server get up to speed", the leader, upon the successful election, appends the `no-op` log entry and broadcasts it - just like normal log replication. Raft takes advantage of its side-effect that the restarted server will replay its commit (from start to the leader's `commitIndex`).
 
 ### Snapshotting (4A, 4B) 📸
 
-In a long-running system, the Raft log cannot grow indefinitely. We use Snapshotting to trim old log entries once the application state machine has safely processed and persisted them.
+In a long-running system, the Raft log cannot grow indefinitely. We use "Snapshotting" to trim old log entries once the application state machine has safely processed and persisted them.
+Think of the `Put` operation on the same key. At some point, we don't want to keep the history of the keys replacing one another. We only want to keep the latest key-value pair.
+One can think of this as a form of garbage collection (like those in Multi-version Concurrency Control - MVCC).
 
 The service layer (KV Store) determines when to snapshot. When triggered, Raft discards log entries up to a specific index, records the `snapLastIndex` and `snapLastTerm` (to maintain log consistency for future `AppendEntries`), and persists both the compacted log and the application snapshot.
 
@@ -250,7 +257,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 }
 ```
 ### InstallSnapshot RPC
-If a follower falls far behind (e.g., it was offline while the leader took a snapshot and discarded the logs the follower needs), standard `AppendEntries` cannot bring it up to date. In this case, the leader uses the InstallSnapshot RPC to send its entire state to the follower.
+If a follower falls far behind (e.g., it was offline while the leader took a snapshot and discarded the logs the follower needs), standard `AppendEntries` cannot bring it up to date. In this case, the leader uses the `InstallSnapshot` RPC to send its entire state to the follower.
 
 The follower must decide whether to replace its entire log or retain a suffix if it already has some of the data:
 ```go
@@ -283,9 +290,10 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 ### Sharded KV on top of Raft (5A, 5B)
 
-The ShardKV server wraps Raft to create a linearizable (every operation "appears" to happen instantaneously), key-value store. It submits operations (Get, Put, Append) to Raft and waits for them to be committed.
+The `ShardKV` server wraps Raft to create a linearizable (every operation "appears" to happen instantaneously), key-value store. It submits operations (Get, Put, Append) to Raft and waits for them to be committed.
 
 **Ensuring Linearizability**
+
 We use a Submit-and-Wait pattern to guarantee strong consistency:
 
 1. Request: Handler receives a client RPC.
@@ -294,7 +302,7 @@ We use a Submit-and-Wait pattern to guarantee strong consistency:
 
 3. Wait: Listens on a dedicated channel for that specific log index.
 
-4. Execute: When the Raft loop applies the log, the result is sent back to the handler.
+4. Execute: When the Raft loop applies the log (commited), the result is sent back to the handler.
 
 To handle network partitions and retries (at-most-once semantics), the system tracks the latest serialNumber seen for each `ClientId`.
 
@@ -365,9 +373,11 @@ func (kv *ShardKV) runConfigPolling() {
 When a `ShardKV` leader detects a new configuration, it determines which shards it now owns but doesn't have the data for. It then issues a `TransferShard` RPC to the replica group that *used to* own that shard to pull the data.
 
 Once the leader has gathered all the necessary data from other groups, it proposes a `Reconfigure` operation to its own Raft log. This operation contains the new configuration and all the shard data it just received. When this log entry is applied by the `runKVServer` loop, the replica group atomically updates to the new configuration and ingests the new data.
+⚠️ Note that the shard re-configuration mechanism I described so far is "naive". By that I mean the change in membership causes every node in the cluster to respond.
+In the industry-strength system, it is likely to use [Consistent Hashing](https://en.wikipedia.org/wiki/Consistent_hashing) scheme where such overhead is avoided.
 
 ```markdown
 And that's it!
 ```
 
-For anyone interested in a deep, hands-on understanding of distributed systems, I cannot recommend the [MIT 6.824 course materials](https://pdos.csail.mit.edu/6.824/) highly enough. I think I forget to mention that the video lectures are also available on [Youtube](https://www.youtube.com/playlist?list=PLrw6a1wE39_tb2fErI4-WkMbsvGQk9_UB). You can pretty much get the full course experience 😁 - well, without the pain of mid-term and final exam !
+For anyone interested in a deep, hands-on understanding of distributed systems, I cannot recommend the [MIT 6.824 course materials](https://pdos.csail.mit.edu/6.824/) enough. I think I forget to mention that the video lectures are also available on [Youtube](https://www.youtube.com/playlist?list=PLrw6a1wE39_tb2fErI4-WkMbsvGQk9_UB). You can pretty much get the full course experience 😁 - well, without the pain of mid-term and final exam !
